@@ -1,0 +1,550 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>배경 + 캐릭터 미리보기</title>
+  <style>
+    html, body { margin:0; height:100%; overflow:hidden; background:#9fd8ef; font-family:sans-serif; }
+    #hud { position:absolute; top:12px; left:0; right:0; text-align:center; color:#222; pointer-events:none; }
+    #loading { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; font-size:20px; color:#222; pointer-events:none; }
+  </style>
+</head>
+<body>
+  <div id="hud">로블록스처럼 W/A/S/D는 항상 화면 기준(화면 안쪽=W) · 트랙패드 두 손가락 쓸기: 화면 회전 · 핀치: 확대·축소</div>
+  <div id="loading">캐릭터 불러오는 중...</div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+  <script>
+// background.js
+// 게임의 배경(길게 뻗은 길 + 양옆의 큰 벽 + 하늘/조명)을 담당하는 파일
+// 사용법: background.js 파일을 three.js 다음에 스크립트로 불러오고,
+//         createBackground(scene) 를 한 번 호출하면 됨.
+// 캐릭터는 +z 방향(앞)으로 달린다고 가정하고, 길은 z축을 따라 길게 뻗어 있음.
+
+function createBackground(scene) {
+  const PATH_WIDTH = 10;      // 길의 폭
+  const PATH_LENGTH = 400;    // 길의 길이 (앞뒤로 이만큼 뻗어 있음)
+  const WALL_HEIGHT = 9;      // 벽 높이 (겁나 큼)
+  const WALL_THICK = 1.2;     // 벽 두께
+
+  // ---- 하늘 & 안개 ----
+  scene.background = new THREE.Color(0x9fd8ef);
+  // 안개 색이 하늘색과 같다보니, 멀리 뻗은 벽이 안개에 묻혀 마치 뚫린 것처럼 보이는 착시가 있었음
+  // → 안개가 시작/끝나는 거리를 훨씬 멀리 밀어서, 자주 다니는 구역에서는 벽이 또렷하게 보이게 함
+  scene.fog = new THREE.Fog(0x9fd8ef, 60, 220);
+
+  // ---- 조명 ----
+  const hemi = new THREE.HemisphereLight(0xffffff, 0x6a8a6a, 1.0);
+  scene.add(hemi);
+
+  const sun = new THREE.DirectionalLight(0xffffff, 1.0);
+  sun.position.set(6, 14, -4);
+  sun.castShadow = true;
+  sun.shadow.mapSize.set(2048, 2048);
+  sun.shadow.camera.left = -12; sun.shadow.camera.right = 12;
+  sun.shadow.camera.top = 12;   sun.shadow.camera.bottom = -12;
+  sun.shadow.camera.far = 60;
+  sun.shadow.bias = -0.0006;
+  scene.add(sun);
+
+  // ---- 바닥 (길) ----
+  const ground = new THREE.Mesh(
+    new THREE.PlaneGeometry(PATH_WIDTH, PATH_LENGTH),
+    new THREE.MeshLambertMaterial({ color: 0x8a9a52 })
+  );
+  ground.rotation.x = -Math.PI / 2;
+  ground.receiveShadow = true;
+  scene.add(ground);
+
+  // 가운데 달리는 느낌을 주는 격자
+  const grid = new THREE.GridHelper(PATH_LENGTH, PATH_LENGTH / 2, 0x6c7a3e, 0x75854a);
+  grid.scale.x = PATH_WIDTH / PATH_LENGTH;
+  grid.position.y = 0.01;
+  scene.add(grid);
+
+  // ---- 끝/안전구역 치수를 먼저 정해서, 복도 벽이 그 앞에서 멈추게 함 ----
+  // 안전구역을 정사각형으로 더 키움 (가로 = 세로)
+  const SAFE_LENGTH = 18;                       // 안전구역 가로·세로 길이 (정사각형)
+  const ROOM_EXTRA = (SAFE_LENGTH - PATH_WIDTH) / 2; // 그만큼 양옆으로 넓힘
+  const ROOM_WIDTH = PATH_WIDTH + ROOM_EXTRA * 2;    // = SAFE_LENGTH
+  const END_Z = PATH_LENGTH / 2;                // 길이 끝나는 지점 (아래쪽)
+  const SAFE_START = END_Z - SAFE_LENGTH;       // 안전구역 시작 (여기부터 넓어짐)
+  const SAFE_END = END_Z;                       // 안전구역 끝 (맨 끝)
+  const CORRIDOR_Z0 = -PATH_LENGTH / 2;         // 좁은 복도 시작(위쪽, 계속 이어짐)
+  const CORRIDOR_LEN = SAFE_START - CORRIDOR_Z0; // 좁은 복도는 안전구역 시작 전까지만
+
+  // ---- 좁은 복도 양옆 벽 (안전구역 시작 지점에서 멈춤 — 안 그러면 넓힌 구역을 벽이 막아버림) ----
+  const wallMat = new THREE.MeshStandardMaterial({ color: 0x8c7a63, roughness: 0.95 });
+  const wallTopMat = new THREE.MeshStandardMaterial({ color: 0x6f6050, roughness: 0.95 });
+
+  function makeWall(x, len, z) {
+    const wall = new THREE.Mesh(new THREE.BoxGeometry(WALL_THICK, WALL_HEIGHT, len), wallMat);
+    wall.position.set(x, WALL_HEIGHT / 2, z);
+    wall.castShadow = true;
+    wall.receiveShadow = true;
+    return wall;
+  }
+  const corridorX = PATH_WIDTH / 2 + WALL_THICK / 2;
+  const corridorMidZ = CORRIDOR_Z0 + CORRIDOR_LEN / 2;
+  const leftWall = makeWall(-corridorX, CORRIDOR_LEN, corridorMidZ);
+  const rightWall = makeWall(corridorX, CORRIDOR_LEN, corridorMidZ);
+  scene.add(leftWall, rightWall);
+
+  function makeCap(x, len, z) {
+    const cap = new THREE.Mesh(new THREE.BoxGeometry(WALL_THICK + 0.4, 0.4, len), wallTopMat);
+    cap.position.set(x, WALL_HEIGHT + 0.2, z);
+    cap.castShadow = true;
+    return cap;
+  }
+  scene.add(makeCap(-corridorX, CORRIDOR_LEN, corridorMidZ));
+  scene.add(makeCap(corridorX, CORRIDOR_LEN, corridorMidZ));
+
+  // 벽에 일정 간격으로 세로줄(벽돌 느낌 나는 얕은 패널)
+  const panelMat = new THREE.MeshStandardMaterial({ color: 0x7d6c57, roughness: 1 });
+  function addPanels(x, faceDir) {
+    const n = Math.floor(CORRIDOR_LEN / 4);
+    for (let i = 0; i < n; i++) {
+      const z = CORRIDOR_Z0 + i * 4 + 2;
+      const panel = new THREE.Mesh(new THREE.BoxGeometry(0.06, WALL_HEIGHT * 0.86, 2.6), panelMat);
+      panel.position.set(x + faceDir * (WALL_THICK / 2 + 0.03), WALL_HEIGHT * 0.5, z);
+      scene.add(panel);
+    }
+  }
+  addPanels(-corridorX, 1);
+  addPanels(corridorX, -1);
+
+  // ---- 넓어진 안전구역 양옆 벽 (복도보다 바깥쪽, 복도 벽이 멈춘 지점부터 끝까지) ----
+  const roomX = ROOM_WIDTH / 2 + WALL_THICK / 2;
+  const roomSideLen = SAFE_LENGTH + WALL_THICK;
+  const roomMidZ = SAFE_START + SAFE_LENGTH / 2;
+  scene.add(makeWall(-roomX, roomSideLen, roomMidZ));
+  scene.add(makeWall(roomX, roomSideLen, roomMidZ));
+  scene.add(makeCap(-roomX, roomSideLen, roomMidZ));
+  scene.add(makeCap(roomX, roomSideLen, roomMidZ));
+
+  const decor = new THREE.Group();
+  scene.add(decor);
+
+  // 안전구역 바닥 (양옆으로 더 넓고, 길게)
+  const safeZone = new THREE.Mesh(
+    new THREE.PlaneGeometry(ROOM_WIDTH, SAFE_LENGTH),
+    new THREE.MeshStandardMaterial({ color: 0xffe066, roughness: 0.8 })
+  );
+  safeZone.rotation.x = -Math.PI / 2;
+  safeZone.position.set(0, 0.015, SAFE_START + SAFE_LENGTH / 2);
+  safeZone.receiveShadow = true;
+  scene.add(safeZone);
+
+  // 안전구역 가장자리 선 (열린 길에서 안전구역으로 들어오는 경계)
+  const safeEdge = new THREE.Mesh(
+    new THREE.PlaneGeometry(ROOM_WIDTH, 0.15),
+    new THREE.MeshBasicMaterial({ color: 0xffffff })
+  );
+  safeEdge.rotation.x = -Math.PI / 2;
+  safeEdge.position.set(0, 0.02, SAFE_START);
+  scene.add(safeEdge);
+
+  // 길의 맨 끝을 막는 벽 (안전구역 너비만큼 넓게)
+  const endWall = new THREE.Mesh(
+    new THREE.BoxGeometry(ROOM_WIDTH + WALL_THICK * 2, WALL_HEIGHT, WALL_THICK),
+    wallMat
+  );
+  endWall.position.set(0, WALL_HEIGHT / 2, END_Z + WALL_THICK / 2);
+  endWall.castShadow = true;
+  endWall.receiveShadow = true;
+  scene.add(endWall);
+
+  // 끝 벽에도 갓돌
+  const endCap = new THREE.Mesh(
+    new THREE.BoxGeometry(ROOM_WIDTH + WALL_THICK * 2 + 0.4, 0.4, WALL_THICK + 0.4),
+    wallTopMat
+  );
+  endCap.position.set(0, WALL_HEIGHT + 0.2, END_Z + WALL_THICK / 2);
+  scene.add(endCap);
+
+  // 좁은 복도 벽 끝 ↔ 넓어진 안전구역 벽 사이의 틈을 막는 연결 벽
+  function makeStep(x1, x2, z) {
+    const w = new THREE.Mesh(
+      new THREE.BoxGeometry(Math.abs(x2 - x1) + WALL_THICK, WALL_HEIGHT, WALL_THICK),
+      wallMat
+    );
+    w.position.set((x1 + x2) / 2, WALL_HEIGHT / 2, z);
+    w.castShadow = true;
+    w.receiveShadow = true;
+    return w;
+  }
+  scene.add(makeStep(-corridorX, -roomX, SAFE_START));
+  scene.add(makeStep(corridorX, roomX, SAFE_START));
+
+  // ---- 안전구역 벽 테두리를 따라가는 울타리 (나중에 여기에 동물을 둘 예정) ----
+  // 큰 돌벽 바로 안쪽에서, 벽과 같은 정사각형 모양을 따라 3면(입구 쪽은 비워둠)
+  const postMat = new THREE.MeshLambertMaterial({ color: 0x8a6a45 });
+  const railFenceMat = new THREE.MeshLambertMaterial({ color: 0x9c7a52 });
+  const FENCE_INSET = 0.7;                         // 벽에서 안쪽으로 이만큼 띄움
+  const fenceHalf = ROOM_WIDTH / 2 - FENCE_INSET;   // 울타리가 그리는 정사각형의 절반 크기
+  const fenceZ0 = SAFE_START + FENCE_INSET;         // 울타리 시작 z (입구 쪽)
+  const fenceZ1 = SAFE_END - FENCE_INSET;           // 울타리 끝 z (벽 쪽)
+
+  function fencePost(x, z) {
+    const post = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.9, 0.1), postMat);
+    post.position.set(x, 0.45, z);
+    post.castShadow = true;
+    return post;
+  }
+  // 두 점 사이에 기둥을 일정 간격으로 세우고, 가로 레일 두 줄로 이어줌
+  function fenceLine(x1, z1, x2, z2) {
+    const dx = x2 - x1, dz = z2 - z1;
+    const len = Math.hypot(dx, dz);
+    const n = Math.max(2, Math.round(len / 1.8));
+    for (let i = 0; i <= n; i++) {
+      const t = i / n;
+      decor.add(fencePost(x1 + dx * t, z1 + dz * t));
+    }
+    for (const railY of [0.3, 0.62]) {
+      const rail = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.08, len + 0.1), railFenceMat);
+      rail.position.set((x1 + x2) / 2, railY, (z1 + z2) / 2);
+      rail.rotation.y = Math.atan2(dx, dz);
+      rail.castShadow = true;
+      decor.add(rail);
+    }
+  }
+  // 왼쪽 변, 오른쪽 변, 안쪽(벽 쪽) 변 — 정사각형 모양, 입구 쪽만 열어둠
+  fenceLine(-fenceHalf, fenceZ0, -fenceHalf, fenceZ1);
+  fenceLine(fenceHalf, fenceZ0, fenceHalf, fenceZ1);
+  fenceLine(-fenceHalf, fenceZ1, fenceHalf, fenceZ1);
+
+  // 나중에 매 프레임 호출할 수 있는 업데이트 함수 (지금은 애니메이션 없음, 자리만 마련)
+  function update(dt) {}
+
+  return {
+    group: decor, ground, grid, leftWall, rightWall,
+    pathWidth: PATH_WIDTH, pathLength: PATH_LENGTH,
+    safeZone: { minZ: SAFE_START, maxZ: SAFE_END },  // 이 z 범위 안이면 안전구역
+    fencePen: { halfSize: fenceHalf, z0: fenceZ0, z1: fenceZ1 }, // 울타리 안쪽(동물 놓을 자리)
+    endZ: END_Z,
+    roomWidth: ROOM_WIDTH,
+    wallThick: WALL_THICK,
+    update
+  };
+}
+  </script>
+  <script>
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.1, 300);
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    renderer.setSize(innerWidth, innerHeight);
+    renderer.outputEncoding = THREE.sRGBEncoding;
+    renderer.shadowMap.enabled = true;
+    document.body.appendChild(renderer.domElement);
+
+    const bg = createBackground(scene);
+
+    // ---- 캐릭터 색 ----
+    const C = { skin: 0xf0c09a, shirt: 0xe8464b, shorts: 0x2f3f6e, shoe: 0xf5f5f5, sole: 0x333333, hair: 0x3a2614 };
+    const MODEL_URLS = [
+      "https://cdn.jsdelivr.net/gh/mrdoob/three.js@r128/examples/models/gltf/Xbot.glb",
+      "https://threejs.org/examples/models/gltf/Xbot.glb"
+    ];
+    let mixer = null, character = null;
+    const actions = {};
+    const loader = new THREE.GLTFLoader();
+
+    // Walk/Run 클립에는 엉덩이(Hips) 뼈가 실제로 앞으로 나아가는 "루트 모션"이 들어있어서,
+    // 캐릭터를 우리가 직접 움직이는 지금 구조에서는 이게 그대로 더해져 벽에 막혔을 때
+    // 제자리걸음이 아니라 밀렸다 되돌아오는 것처럼(튕기는 것처럼) 보임.
+    // 그래서 Hips 위치 트랙에서 좌우/앞뒤(X,Z) 이동분만 빼고, 위아래(Y, 걸음마다 들썩이는 느낌)는 남겨둠.
+    function stripRootMotionXZ(clip) {
+      const track = clip.tracks.find(t => /Hips\.position$/.test(t.name));
+      if (!track || !track.values || track.values.length < 3) return;
+      const v = track.values;
+      const x0 = v[0], z0 = v[2];
+      for (let i = 0; i < v.length; i += 3) {
+        v[i] = x0;
+        v[i + 2] = z0;
+      }
+    }
+
+    function paintMesh(mesh) {
+      const geo = mesh.geometry;
+      const pos = geo.attributes.position, si = geo.attributes.skinIndex, sw = geo.attributes.skinWeight;
+      const bones = mesh.skeleton.bones;
+      const colors = new Float32Array(pos.count * 3);
+      const v = new THREE.Vector3(), a = new THREE.Vector3(), b = new THREE.Vector3();
+      const hipsBone = bones.find(x => /Hips$/.test(x.name));
+      const hipsY = hipsBone ? hipsBone.getWorldPosition(new THREE.Vector3()).y : 1.0;
+      function along(bone, p) {
+        bone.getWorldPosition(a);
+        if (!bone.children[0]) return 0;
+        bone.children[0].getWorldPosition(b);
+        const ab = b.clone().sub(a);
+        return p.clone().sub(a).dot(ab) / ab.lengthSq();
+      }
+      const col = c => new THREE.Color(c);
+      for (let i = 0; i < pos.count; i++) {
+        let best = 0, bw = -1;
+        for (let j = 0; j < 4; j++) { const w = sw.getComponent(i, j); if (w > bw) { bw = w; best = si.getComponent(i, j); } }
+        const bone = bones[best]; const n = bone ? bone.name : "";
+        v.fromBufferAttribute(pos, i).applyMatrix4(mesh.matrixWorld);
+        let c = C.shirt;
+        if (/Head|Neck|Eye/.test(n)) c = C.skin;
+        else if (/Hand/.test(n)) c = C.skin;
+        else if (/ForeArm/.test(n)) c = C.skin;
+        else if (/Arm/.test(n)) c = along(bone, v) < 0.42 ? C.shirt : C.skin;
+        else if (/Shoulder|Spine/.test(n)) c = C.shirt;
+        else if (/UpLeg/.test(n)) c = along(bone, v) < 0.5 ? C.shorts : C.skin;
+        else if (/Hips/.test(n)) c = v.y > hipsY + 0.06 ? C.shirt : C.shorts;
+        else if (/Leg/.test(n)) c = C.skin;
+        else if (/Foot|Toe/.test(n)) c = v.y < 0.035 ? C.sole : C.shoe;
+        const cc = col(c);
+        colors[i * 3] = cc.r; colors[i * 3 + 1] = cc.g; colors[i * 3 + 2] = cc.b;
+      }
+      geo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+      mesh.material = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.8, metalness: 0, skinning: true });
+      mesh.castShadow = true;
+    }
+
+    function addFace(meshes) {
+      const headBone = meshes[0].skeleton.bones.find(x => /Head$/.test(x.name));
+      if (!headBone) return;
+      const box = new THREE.Box3(); const v = new THREE.Vector3();
+      for (const mesh of meshes) {
+        const geo = mesh.geometry;
+        const pos = geo.attributes.position, si = geo.attributes.skinIndex, sw = geo.attributes.skinWeight;
+        const bones = mesh.skeleton.bones;
+        for (let i = 0; i < pos.count; i++) {
+          let best = 0, bw = -1;
+          for (let j = 0; j < 4; j++) { const w = sw.getComponent(i, j); if (w > bw) { bw = w; best = si.getComponent(i, j); } }
+          if (bones[best] && /Head/.test(bones[best].name)) box.expandByPoint(v.fromBufferAttribute(pos, i).applyMatrix4(mesh.matrixWorld));
+        }
+      }
+      if (box.isEmpty()) return;
+      const c = box.getCenter(new THREE.Vector3()), h = box.getSize(new THREE.Vector3()).multiplyScalar(0.5);
+      const parts = []; const solid = col => new THREE.MeshStandardMaterial({ color: col, roughness: 0.9 });
+      const hair = new THREE.Mesh(new THREE.SphereGeometry(1, 40, 28, 0, Math.PI * 2, 0, 1.75), solid(C.hair));
+      hair.scale.set(h.x * 1.09, h.y * 1.06, h.z * 1.09);
+      hair.position.set(c.x, c.y + h.y * 0.06, c.z - h.z * 0.03);
+      hair.rotation.x = -0.6; parts.push(hair);
+      const fringe = new THREE.Mesh(new THREE.SphereGeometry(1, 28, 16), solid(C.hair));
+      fringe.scale.set(h.x * 0.95, h.y * 0.28, h.z * 0.5);
+      fringe.position.set(c.x, c.y + h.y * 0.62, c.z + h.z * 0.55);
+      parts.push(fringe);
+      const onFace = (fx, fy, inset) => {
+        const r = Math.max(0, 1 - fx * fx - fy * fy);
+        return new THREE.Vector3(c.x + fx * h.x, c.y + fy * h.y, c.z + h.z * Math.sqrt(r) - inset);
+      };
+      for (const side of [-1, 1]) {
+        const eye = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 16), solid(0x1a1a1a));
+        eye.scale.set(h.x * 0.1, h.y * 0.13, h.z * 0.06);
+        eye.position.copy(onFace(side * 0.36, 0.05, h.z * 0.02)); parts.push(eye);
+        const shine = new THREE.Mesh(new THREE.SphereGeometry(1, 8, 8), new THREE.MeshBasicMaterial({ color: 0xffffff }));
+        shine.scale.setScalar(h.x * 0.03);
+        shine.position.copy(onFace(side * 0.36 + 0.03, 0.1, -h.z * 0.035)); parts.push(shine);
+        const brow = new THREE.Mesh(new THREE.BoxGeometry(h.x * 0.24, h.y * 0.04, h.z * 0.05), solid(C.hair));
+        brow.position.copy(onFace(side * 0.36, 0.26, h.z * 0.01)); parts.push(brow);
+        const ear = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 16), solid(C.skin));
+        ear.scale.set(h.x * 0.1, h.y * 0.2, h.z * 0.16);
+        ear.position.set(c.x + side * h.x * 0.98, c.y + h.y * 0.0, c.z - h.z * 0.05); parts.push(ear);
+      }
+      const mouth = new THREE.Mesh(new THREE.TorusGeometry(h.x * 0.15, h.x * 0.025, 8, 16, Math.PI), solid(0x8a3b2a));
+      mouth.rotation.z = Math.PI; mouth.position.copy(onFace(0, -0.4, h.z * 0.01)); parts.push(mouth);
+      for (const p of parts) { p.castShadow = true; scene.add(p); p.updateMatrixWorld(); headBone.attach(p); }
+    }
+
+    // 울타리 안쪽, 안전구역 중앙 즈음에 세워둠
+    const standZ = (bg.safeZone.minZ + bg.safeZone.maxZ) / 2;
+
+    function loadModel(i) {
+      loader.load(MODEL_URLS[i], (gltf) => {
+        try {
+          const model = gltf.scene;
+          model.scale.setScalar(0.5);   // 캐릭터 크기 절반으로
+          scene.add(model);
+          model.updateMatrixWorld(true);
+
+          const meshes = [];
+          model.traverse(o => { if (o.isSkinnedMesh) meshes.push(o); });
+
+          character = model;
+          mixer = new THREE.AnimationMixer(model);
+          for (const clip of gltf.animations) {
+            const name = clip.name.toLowerCase();
+            if (!["idle", "walk", "run"].includes(name)) continue;
+            stripRootMotionXZ(clip);   // 걷기/달리기 클립 자체에 들어있는 앞으로 나가는 움직임을 빼서
+                                       // "제자리걸음"이 되게 함 (이게 없어서 벽에 막혀도 애니메이션이 계속 앞으로 밀고 나가다 되감겨서 튕기는 것처럼 보였음)
+            const a = mixer.clipAction(clip);
+            a.play(); a.setEffectiveWeight(0);
+            actions[name] = a;
+          }
+
+          try { meshes.forEach(paintMesh); addFace(meshes); }
+          catch (e) { console.error("꾸미기 실패:", e); }
+        } finally {
+          document.getElementById("loading").style.display = "none";
+        }
+      }, undefined, (err) => {
+        console.error(err);
+        if (i + 1 < MODEL_URLS.length) loadModel(i + 1);
+        else document.getElementById("loading").textContent = "캐릭터를 불러오지 못했어요. 인터넷 연결을 확인해 주세요.";
+      });
+    }
+    loadModel(0);
+
+    // ================= 로블록스 방식 조작: 화면(카메라) 보는 방향 기준으로 WASD, 캐릭터는 가는 쪽을 자동으로 바라봄 =================
+    const charPos = new THREE.Vector3(0, 0, standZ);  // 울타리 안전구역 한가운데서 시작
+    let charYaw = Math.PI;        // 캐릭터가 실제로 바라보는 방향(이동 방향에 맞춰 자동으로 부드럽게 회전)
+    let speed = 0, targetSpeed = 0;
+    const CHAR_RADIUS = 0.25;     // 벽 충돌 계산용 캐릭터 반지름
+
+    const keys = {};
+    addEventListener("keydown", e => {
+      keys[e.key.toLowerCase()] = true;
+      if (e.key === " ") { targetSpeed = 0; e.preventDefault(); }
+    });
+    addEventListener("keyup", e => { keys[e.key.toLowerCase()] = false; });
+
+    // ---- 카메라: 캐릭터가 어느 쪽을 보든 상관없이, 화면(각도)은 고정 — 위치만 캐릭터를 따라감 ----
+    let camYaw = Math.PI, camPitch = 0.16, dist = 3.2;   // 이 각도는 캐릭터가 돌아도 안 바뀜
+
+    // 크롬북 트랙패드: 손가락 두 개로 쓸면 브라우저가 이걸 touch가 아니라 "wheel" 이벤트로 보냄.
+    // 핀치(확대·축소)할 땐 ctrlKey가 같이 켜져서 들어오고, 그냥 두 손가락으로 끌 땐 꺼져 있음.
+    renderer.domElement.addEventListener("wheel", e => {
+      e.preventDefault();
+      if (e.ctrlKey) {
+        dist = Math.max(1.2, Math.min(8, dist + e.deltaY * 0.01));
+      } else {
+        camYaw -= e.deltaX * 0.003;
+        camPitch = Math.max(-0.9, Math.min(1.1, camPitch + e.deltaY * 0.002));
+      }
+    }, { passive: false });
+
+    // ---- 터치: 손가락 2개로 한번에 — 같이 끌면 화면 회전, 두 손가락 사이를 벌리거나 모으면 확대·축소 ----
+    let twoFingerActive = false, lastMidX = 0, lastMidY = 0, lastPinchDist = 0;
+    function touchMid(t0, t1) { return { x: (t0.clientX + t1.clientX) / 2, y: (t0.clientY + t1.clientY) / 2 }; }
+    function touchDist(t0, t1) { return Math.hypot(t1.clientX - t0.clientX, t1.clientY - t0.clientY); }
+
+    renderer.domElement.addEventListener("touchstart", e => {
+      if (e.touches.length === 2) {
+        twoFingerActive = true;
+        const m = touchMid(e.touches[0], e.touches[1]);
+        lastMidX = m.x; lastMidY = m.y;
+        lastPinchDist = touchDist(e.touches[0], e.touches[1]);
+      } else {
+        twoFingerActive = false;
+      }
+      e.preventDefault();
+    }, { passive: false });
+
+    renderer.domElement.addEventListener("touchmove", e => {
+      if (twoFingerActive && e.touches.length === 2) {
+        const m = touchMid(e.touches[0], e.touches[1]);
+        camYaw -= (m.x - lastMidX) * 0.008;
+        camPitch = Math.max(-0.9, Math.min(1.1, camPitch + (m.y - lastMidY) * 0.006));
+        lastMidX = m.x; lastMidY = m.y;
+
+        const d = touchDist(e.touches[0], e.touches[1]);
+        dist = Math.max(1.2, Math.min(8, dist - (d - lastPinchDist) * 0.01));
+        lastPinchDist = d;
+      }
+      e.preventDefault();
+    }, { passive: false });
+
+    renderer.domElement.addEventListener("touchend", e => {
+      if (e.touches.length < 2) twoFingerActive = false;
+    });
+
+    addEventListener("resize", () => {
+      camera.aspect = innerWidth / innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(innerWidth, innerHeight);
+    });
+
+    const WALK_SPEED = 1.3, RUN_SPEED = 3.6;
+    let phase = 0, last = performance.now();
+
+    function frame(now) {
+      const dt = Math.min((now - last) / 1000, 0.05);
+      last = now;
+
+      // 카메라가 보는 방향을 기준으로 "앞/옆"을 계산 (로블록스처럼: 카메라를 어디로 돌리든 W는 항상 화면 안쪽으로)
+      const fwdX = -Math.sin(camYaw), fwdZ = -Math.cos(camYaw);   // 카메라가 바라보는 쪽
+      const rightX = -fwdZ, rightZ = fwdX;                        // 그 오른쪽
+
+      let mx = 0, mz = 0;
+      if (keys["w"]) { mx += fwdX; mz += fwdZ; }
+      if (keys["s"]) { mx -= fwdX; mz -= fwdZ; }
+      if (keys["d"]) { mx += rightX; mz += rightZ; }
+      if (keys["a"]) { mx -= rightX; mz -= rightZ; }
+
+      const mLen = Math.hypot(mx, mz);
+      if (mLen > 0.001) {
+        mx /= mLen; mz /= mLen;
+        targetSpeed = 4.2;
+        // 캐릭터가 가는 방향을 바로바로(거의 즉시) 바라보게
+        const wantYaw = Math.atan2(mx, mz);
+        let d = ((wantYaw - charYaw + Math.PI) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2) - Math.PI;
+        charYaw += d * Math.min(1, dt * 14);
+      } else {
+        targetSpeed = 0;
+      }
+      // 거의 즉시 목표 속도에 도달 (아주 살짝만 부드럽게)
+      speed += (targetSpeed - speed) * Math.min(1, dt * 20);
+
+      const absSpeed = Math.abs(speed);
+      const wIdle = Math.max(0, 1 - absSpeed);
+      const wRun  = Math.max(0, Math.min(1, absSpeed - 1));
+      const wWalk = Math.max(0, 1 - wIdle - wRun);
+      const timeScale = absSpeed > 2 ? 1 + (absSpeed - 2) * 0.35 : 1;
+      let groundSpeed = 0;
+
+      if (mixer && actions.walk && actions.run && actions.idle) {
+        const { idle, walk, run } = actions;
+        idle.setEffectiveWeight(wIdle); walk.setEffectiveWeight(wWalk); run.setEffectiveWeight(wRun);
+        const moving = wWalk + wRun;
+        if (moving > 0) {
+          const dur = (walk.getClip().duration * wWalk + run.getClip().duration * wRun) / moving;
+          const phaseStep = dt * timeScale / dur * Math.sign(speed || 1);
+          walk.time = ((walk.time + phaseStep * walk.getClip().duration) % walk.getClip().duration + walk.getClip().duration) % walk.getClip().duration;
+          run.time  = ((run.time  + phaseStep * run.getClip().duration)  % run.getClip().duration  + run.getClip().duration)  % run.getClip().duration;
+        }
+        idle.time = (idle.time + dt) % idle.getClip().duration;
+        mixer.update(0);
+        groundSpeed = Math.sign(speed) * (WALK_SPEED * wWalk + RUN_SPEED * wRun) * timeScale;
+      }
+
+      // ---- 이동 + 벽 충돌 (좁은 복도/넓은 안전구역 폭에 맞춰 못 나가게 막음) ----
+      // 실제 이동은 입력 방향(mx, mz) 그대로; charYaw는 캐릭터가 바라보는 모습(시각)만 담당
+      let nx = charPos.x + mx * groundSpeed * dt;
+      let nz = charPos.z + mz * groundSpeed * dt;
+
+      // 벽의 실제 안쪽 면이 pathWidth/2, roomWidth/2, endZ 지점이라 거기서 캐릭터 반지름만큼만 빼면 됨
+      // (전에는 벽 두께까지 한 번 더 빼서 벽 앞 빈 공간에서 멈추는 느낌이었음)
+      // inRoom 판정은 "이번에 움직이려는 위치(nz)"가 아니라 "지금 서 있는 위치(charPos.z)" 기준으로 해서,
+      // 경계선 바로 위에서 폭이 매 프레임 왔다갔다 하며 튕기는 걸 막음
+      const inRoom = charPos.z >= bg.safeZone.minZ + bg.wallThick / 2;
+      const halfW = (inRoom ? bg.roomWidth : bg.pathWidth) / 2 - CHAR_RADIUS;
+      nx = Math.max(-halfW, Math.min(halfW, nx));
+      nz = Math.min(nz, bg.endZ - CHAR_RADIUS);   // 막다른 끝 벽도 못 지나감
+
+      // 막힌 쪽으로는 더 못 가고, 그 자리에 멈춰서 제자리걸음만 하도록
+      charPos.x = nx; charPos.z = nz;
+      if (character) { character.position.copy(charPos); character.rotation.y = charYaw; }
+
+      // 카메라 각도(camYaw, camPitch)는 캐릭터가 어떻게 움직이든 안 바뀌고, 위치만 캐릭터를 따라감
+      const camTarget = new THREE.Vector3(charPos.x, charPos.y + 0.5, charPos.z);
+      camera.position.set(
+        camTarget.x + Math.sin(camYaw) * Math.cos(camPitch) * dist,
+        camTarget.y + Math.sin(camPitch) * dist,
+        camTarget.z + Math.cos(camYaw) * Math.cos(camPitch) * dist
+      );
+      camera.lookAt(camTarget);
+
+      bg.update(dt);
+      renderer.render(scene, camera);
+      requestAnimationFrame(frame);
+    }
+    requestAnimationFrame(frame);
+  </script>
+</body>
+</html>
