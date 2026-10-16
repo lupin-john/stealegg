@@ -90,9 +90,17 @@
       #egg-counter { top:8px; right:calc(12px + env(safe-area-inset-right)); padding:5px 12px; font-size:13px; }
       #carrying-hud { top:44px; right:calc(12px + env(safe-area-inset-right)); padding:5px 12px; font-size:13px; }
     }
+    /* 부화 안내 문구 / 부화 순간 번쩍임 / 모바일 부화 버튼(초록 링) */
+    #hatch-info { position:absolute; bottom:24px; left:50%; transform:translateX(-50%); display:none; white-space:nowrap;
+      background:rgba(12,10,24,0.86); backdrop-filter:blur(10px); border:1px solid rgba(255,255,255,0.28); border-radius:999px;
+      padding:7px 18px; color:#fff; font-size:14px; font-weight:700; box-shadow:0 6px 20px rgba(0,0,0,0.45); pointer-events:none; z-index:15; }
+    #hatch-flash { position:fixed; inset:0; background:#fff; opacity:0; pointer-events:none; z-index:40; }
+    #btn-egg[data-mode="hatch"] .prog { stroke:url(#eggRingGreen); filter:drop-shadow(0 0 4px rgba(74,222,128,0.85)); }
+    #btn-egg[data-mode="hatch"] .egg-icon { fill:#bbf7d0; }
+    @media (pointer: coarse) and (orientation: landscape) { #hatch-info { bottom:14px; font-size:12.5px; padding:5px 14px; } }
     /* 알을 들고 쫓길 때 화면 가장자리가 은은하게 붉어짐(투명도는 JS가 조절, 평소엔 안 보임) */
     #danger-vignette { position:fixed; inset:0; pointer-events:none; z-index:5; opacity:0;
-      background:radial-gradient(ellipse 85% 85% at 50% 50%, rgba(220,0,30,0) 52%, rgba(220,0,30,0.5) 84%, rgba(150,0,20,0.9) 100%); }
+      background:radial-gradient(ellipse 80% 80% at 50% 50%, rgba(220,0,30,0) 40%, rgba(220,0,30,0.55) 75%, rgba(170,0,25,0.95) 100%); }
     #egg-counter {
       position:absolute; top:20px; right:20px;
       background:rgba(12,10,24,0.80); backdrop-filter:blur(10px);
@@ -118,13 +126,16 @@
   <div id="pickup-prompt">🥚 F — 알 들기</div>
   <div id="drop-prompt">📦 F — 내려놓기</div>
   <div id="danger-vignette"></div>
+  <div id="hatch-info"></div>
+  <div id="hatch-flash"></div>
   <div id="egg-counter">🥚 내 알 0개</div>
   <div id="joy-base" class="touch-ui"><div id="joy-knob"></div></div>
   <div id="btn-jump" class="touch-ui"><svg viewBox="0 0 24 24"><path d="M12 19V6M6.5 11.5 12 6l5.5 5.5"/></svg><span>점프</span></div>
   <div id="btn-egg" class="touch-ui" data-mode="pick">
     <svg class="ring" viewBox="0 0 100 100"><defs>
       <linearGradient id="eggRingGold" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#fef08a"/><stop offset="1" stop-color="#f59e0b"/></linearGradient>
-      <linearGradient id="eggRingRed" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#fecaca"/><stop offset="1" stop-color="#ef4444"/></linearGradient></defs>
+      <linearGradient id="eggRingRed" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#fecaca"/><stop offset="1" stop-color="#ef4444"/></linearGradient>
+      <linearGradient id="eggRingGreen" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#bbf7d0"/><stop offset="1" stop-color="#22c55e"/></linearGradient></defs>
       <circle class="track" cx="50" cy="50" r="45"/><circle class="prog" id="egg-ring-prog" cx="50" cy="50" r="45"/></svg>
     <div class="face"><svg class="egg-icon" viewBox="0 0 24 24"><path d="M12 2.5c3.6 0 6.5 5.4 6.5 9.6 0 3.9-2.9 7.4-6.5 7.4s-6.5-3.500-6.500-7.400C5.500 7.900 8.400 2.500 12 2.500z"/></svg><span class="hint">꾹 눌러</span><span class="act" id="btn-egg-label">알 들기</span></div>
   </div>
@@ -4530,6 +4541,7 @@ function createCreatureAndEgg(zone, corridorX, wallInnerX = 8.0) {
     }
   }
   animParts.creatureBoxes = creatureBoxes;      // (검증용)
+  animParts.makeEgg = eggFactory;               // 알 1개를 만드는 함수(저장된 알 복원에 사용)
   // 배치 계산(짚단 포함)이 끝났으니, 바닥 장식은 동물 그룹에서 떼어 구역 root의 같은 자리에 둠
   creatureGroup.remove(spot); root.add(spot);
   spot.position.set(creatureGroup.position.x, 0, creatureGroup.position.z);
@@ -5363,14 +5375,176 @@ function createBackground(scene) {
       rig.carryMount.remove(e.group); scene.add(e.group);
       const r = e.radius * 1.05;
       const spot = slotInMyPlot(r) || bestEffortSlot(r);                                  // 자리가 다 찼으면 가장 덜 겹치는 자리에
-      minePlaced.push({ x: spot.x, z: spot.z, r });
+      const placed = { x: spot.x, z: spot.z, r }; minePlaced.push(placed); e._placed = placed;
       e.group.scale.setScalar(e.scale);
       e.group.position.set(spot.x, 0, spot.z);
       e.group.rotation.set(0, Math.PI + (Math.random() - 0.5) * 0.6, 0);
       e.secured = true;
-      myEggCount++; eggCounter.textContent = `🥚 내 알 ${myEggCount}개`;
+      const roll = rollHatch(e.scale);                                                    // 이 알의 부화 시간과 마지막 크기 배율이 정해짐
+      e.hatch = { s0: e.scale, grow: roll.grow, start: nowMs(), dur: roll.dur, state: 'incubating', hatchAt: null };
+      myEggs.push({ c, e }); syncCounts(); saveGame();
       sendHome(c);                                                    // 동물은 돌아가서 다시 잠
     }
+
+    // ================= 부화: 내 칸의 알은 시간이 지나며 점점 커지고 → 부화 준비 → F로 '부화하기' → 흔들리다 깨지며 그 동물이 나옴 =================
+    const HATCH_MIN_SEC = 30, HATCH_MAX_SEC = 24 * 3600;      // 가장 빠른 알 30초 ~ 가장 큰 알 최대 하루
+    const GROW_MAX = 5;                                       // 부화 직전 크기: 처음 크기의 1~5배(알마다 랜덤)
+    const WOBBLE_SEC = 5;                                     // '부화하기'를 누른 뒤 알이 흔들리는 시간
+    const SAVE_KEY = 'eggGame.v1';
+    let timeOffset = 0;                                       // (시험용) 시간을 앞당길 때만 사용
+    const nowMs = () => Date.now() + timeOffset;
+    const myEggs = [], pets = [], fxShards = [];              // 내 칸의 알들 / 부화해서 나온 동물들 / 알 깨지는 조각 효과
+    const hatchInfoEl = document.getElementById('hatch-info'), hatchFlashEl = document.getElementById('hatch-flash');
+    function syncCounts() {
+      myEggCount = myEggs.length + pets.length;
+      eggCounter.textContent = `🥚 내 알 ${myEggs.length}개` + (pets.length ? ` · 🐣 ${pets.length}마리` : '');
+    }
+    // 알 크기(0.55~1.5)가 클수록 오래 걸림. 크기 80% + 랜덤 20%로 정해서 30초(작은 알)~24시간(큰 알) 사이를 로그 간격으로 고름
+    function rollHatch(s0) {
+      const sizeF = Math.max(0, Math.min(1, (s0 - 0.55) / (1.5 - 0.55)));
+      const u = 0.8 * sizeF + 0.2 * Math.random();
+      return { dur: HATCH_MIN_SEC * Math.pow(HATCH_MAX_SEC / HATCH_MIN_SEC, u) * 1000, grow: 1 + (GROW_MAX - 1) * Math.random() };
+    }
+    function fmtDur(ms) {
+      const sec = Math.max(0, Math.ceil(ms / 1000));
+      return sec >= 3600 ? `${Math.floor(sec / 3600)}시간 ${Math.floor(sec % 3600 / 60)}분` : `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
+    }
+
+    function startHatch(e) {
+      if (!e.hatch || e.hatch.state !== 'ready') return;
+      e.hatch.state = 'hatching'; e.hatch.hatchAt = nowMs(); saveGame();
+    }
+    function spawnPet(cid, x, z, yaw, scale, pop) {            // 부화한 동물: 알이 커진 만큼 크게(scale = 알의 마지막 크기)
+      const g = new THREE.Group(); g.position.set(x, 0, z); g.rotation.y = yaw; scene.add(g);
+      const F = CREATURE_FACTORIES[cid](g);
+      F.setAction('sleep'); for (let i = 0; i < 240; i++) F.update(0.05);
+      const pet = { cid, group: g, anim: F, scale, t: pop ? 0 : 99, awake: false, x, z, yaw };
+      if (pop) { F.setAction(FLYERS.includes(cid) ? 'fly' : 'run'); pet.awake = true; g.scale.setScalar(0.01); } else g.scale.setScalar(scale);
+      pets.push(pet); return pet;
+    }
+    function updatePets(dt) {
+      for (const p of pets) {
+        p.anim.update(dt);
+        if (p.t < 90) {                                         // 나올 때 통통 튀며 커지는 연출
+          p.t += dt; const k = Math.min(1, p.t / 0.7), c1 = 1.70158, c3 = c1 + 1;
+          p.group.scale.setScalar(Math.max(0.01, p.scale * (1 + c3 * Math.pow(k - 1, 3) + c1 * Math.pow(k - 1, 2))));
+          if (p.awake && p.t > 1.6) { p.anim.setAction('sleep'); p.awake = false; }
+          if (p.t > 1.6) { p.t = 99; p.group.scale.setScalar(p.scale); }
+        }
+      }
+    }
+    function burstShards(x, z, size) {                          // 알이 깨지며 튀는 조각
+      const cols = [0xfef3c7, 0xfacc15, 0xffffff];
+      for (let i = 0; i < 16; i++) {
+        const m = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshBasicMaterial({ color: cols[i % 3], transparent: true }));
+        const sz = (0.12 + Math.random() * 0.18) * size; m.scale.set(sz, sz * 0.6, sz); m.position.set(x, size * 0.9, z);
+        const a = Math.random() * Math.PI * 2, sp = (2 + Math.random() * 4) * Math.sqrt(size);
+        fxShards.push({ m, vx: Math.cos(a) * sp, vy: (3 + Math.random() * 4) * Math.sqrt(size), vz: Math.sin(a) * sp, life: 1.2 }); scene.add(m);
+      }
+    }
+    function updateFx(dt) {
+      for (let i = fxShards.length - 1; i >= 0; i--) {
+        const f = fxShards[i]; f.life -= dt; f.vy -= 14 * dt;
+        f.m.position.x += f.vx * dt; f.m.position.y += f.vy * dt; f.m.position.z += f.vz * dt; f.m.rotation.x += 6 * dt; f.m.rotation.z += 4 * dt;
+        f.m.material.opacity = Math.max(0, f.life / 1.2);
+        if (f.life <= 0 || f.m.position.y < 0) { scene.remove(f.m); f.m.material.dispose(); f.m.geometry.dispose(); fxShards.splice(i, 1); }
+      }
+    }
+    function finishHatch(i) {                                   // 딴! 알이 깨지고 동물이 나옴
+      const { c, e } = myEggs[i], x = e.group.position.x, z = e.group.position.z, finalScale = e.scale;
+      burstShards(x, z, finalScale);
+      hatchFlashEl.style.transition = 'none'; hatchFlashEl.style.opacity = '0.65';
+      setTimeout(() => { hatchFlashEl.style.transition = 'opacity 0.6s ease-out'; hatchFlashEl.style.opacity = '0'; }, 30);
+      scene.remove(e.group);
+      const k = c.eggs.indexOf(e); if (k >= 0) c.eggs.splice(k, 1);
+      const pi = minePlaced.indexOf(e._placed); if (pi >= 0) minePlaced.splice(pi, 1);
+      myEggs.splice(i, 1);
+      spawnPet(c.id, x, z, Math.PI, finalScale, true);          // 내 칸의 문(앞쪽, 광장)을 바라보게
+      syncCounts(); saveGame();
+    }
+    function updateHatching(dt) {
+      const now = nowMs();
+      for (let i = myEggs.length - 1; i >= 0; i--) {
+        const { e } = myEggs[i], h = e.hatch;
+        if (h.state === 'hatching') {                           // 흔들림: 점점 세게
+          const t = (now - h.hatchAt) / 1000;
+          if (t >= WOBBLE_SEC) { finishHatch(i); continue; }
+          const a = Math.min(1, t / WOBBLE_SEC), w = 9 + 16 * a;
+          e.group.rotation.z = Math.sin(t * w) * 0.28 * a; e.group.rotation.x = Math.sin(t * w * 0.83 + 1.3) * 0.2 * a;
+          e.group.position.y = Math.abs(Math.sin(t * w * 1.1)) * 0.10 * e.scale * a;
+          continue;
+        }
+        const p = Math.min(1, Math.max(0, (now - h.start) / h.dur));          // 시간이 지날수록 점점 커짐
+        const sc = h.s0 * (1 + (h.grow - 1) * p);
+        e.scale = sc; e.group.scale.setScalar(sc); e.radius = 0.64 * e.shell * sc;
+        if (e._placed) e._placed.r = e.radius * 1.05;
+        if (p >= 1 && h.state === 'incubating') h.state = 'ready';
+        if (h.state === 'ready') e.group.rotation.z = Math.sin(now / 350) * 0.03;   // 부화 준비되면 살짝 들썩
+      }
+    }
+    // 저장/복원: 부화 시간이 길어서(최대 하루) 새로고침해도 이어지도록 브라우저에 저장. 시간은 '시작 시각'으로 저장해서 꺼져 있던 시간도 흐름
+    function saveGame() {
+      try {
+        const eggs = myEggs.map(({ c, e }) => ({ cid: c.id, x: e.group.position.x, z: e.group.position.z, yaw: e.group.rotation.y,
+          s0: e.hatch.s0, grow: e.hatch.grow, start: e.hatch.start, dur: e.hatch.dur, hatching: e.hatch.state === 'hatching', hatchAt: e.hatch.hatchAt }));
+        const ps = pets.map(p => ({ cid: p.cid, x: p.x, z: p.z, yaw: p.yaw, scale: p.scale }));
+        localStorage.setItem(SAVE_KEY, JSON.stringify({ v: 1, eggs, pets: ps }));
+      } catch (_) {}
+    }
+    function restoreGame() {
+      let data = null; try { data = JSON.parse(localStorage.getItem(SAVE_KEY) || 'null'); } catch (_) {}
+      if (!data || data.v !== 1) return;
+      const now = nowMs();
+      for (const sv of data.eggs || []) {
+        const c = bg.creatures.find(k => k.id === sv.cid); if (!c || !c.makeEgg) continue;
+        const g = new THREE.Group(), parts = c.makeEgg(g);
+        const h = { s0: sv.s0, grow: sv.grow, start: sv.start, dur: sv.dur, state: sv.hatching ? 'hatching' : 'incubating', hatchAt: sv.hatchAt || null };
+        const p = Math.min(1, Math.max(0, (now - h.start) / h.dur)), sc = h.s0 * (1 + (h.grow - 1) * p);
+        const e = { group: g, parts, scale: sc, shell: parts.shell, radius: 0.64 * parts.shell * sc, baseY: c.id === 'archangel' ? 0.38 : 0.18, phase: Math.random() * 6.28, home: null, secured: true, hatch: h };
+        g.position.set(sv.x, 0, sv.z); g.rotation.y = sv.yaw; g.scale.setScalar(sc); scene.add(g);
+        c.eggs.push(e); const placed = { x: sv.x, z: sv.z, r: e.radius * 1.05 }; minePlaced.push(placed); e._placed = placed; myEggs.push({ c, e });
+        if (h.state === 'incubating' && p >= 1) h.state = 'ready';
+      }
+      for (const sv of data.pets || []) spawnPet(sv.cid, sv.x, sv.z, sv.yaw, sv.scale, false);
+      syncCounts(); updateHatching(0);                          // 부화 중이던 알의 흔들림이 이미 끝났으면 바로 부화
+    }
+
+    // 가장 가까운 알 찾기: 'pick'(들 수 있는 알) / 'hatch'(부화 준비된 내 알) / 'info'(아직 키우는 중인 내 알: 남은 시간만 보여줌)
+    function findNearestInteractable() {
+      let best = null, bestGap = PICKUP_GAP;
+      bg.creatures.forEach(c => c.eggs.forEach(e => {
+        const h = e.hatch;
+        if (e.secured && (!h || h.state === 'hatching')) return;                  // 부화 중인 알은 건드릴 수 없음
+        e.group.getWorldPosition(_tmpV);
+        const gap = Math.hypot(charPos.x - _tmpV.x, charPos.z - _tmpV.z) - e.radius;
+        if (gap < bestGap) { bestGap = gap; best = { c, e, kind: e.secured ? (h.state === 'ready' ? 'hatch' : 'info') : 'pick' }; }
+      }));
+      return best;
+    }
+    let _lastPrompt = '';
+    function updateEggUI(dt) {                                  // 가까운 알 하이라이트(흰 테두리) + 안내 문구 + 모바일 버튼
+      const near = !carriedEgg ? findNearestInteractable() : null;
+      const nearEggGroup = near ? near.e.group : null;
+      if (nearEggGroup !== _highlightedGroup) {
+        if (_boxHelper) { scene.remove(_boxHelper); _boxHelper = null; }
+        _highlightedGroup = nearEggGroup;
+        if (nearEggGroup) { _boxHelper = new THREE.BoxHelper(nearEggGroup, 0xffffff); _boxHelper.material.linewidth = 2; scene.add(_boxHelper); }
+      }
+      if (_boxHelper) _boxHelper.update();
+      let prompt = '', info = '';
+      if (near) {
+        const h = near.e.hatch, mult = h ? near.e.scale / h.s0 : 1;
+        if (near.kind === 'pick') prompt = '🥚 F — 알 들기';
+        else if (near.kind === 'hatch') { prompt = '🥚 F — 부화하기'; info = `🥚 부화 준비 완료 · 크기 ×${mult.toFixed(1)}`; }
+        else info = `🥚 부화까지 ${fmtDur(h.start + h.dur - nowMs())} · 크기 ×${mult.toFixed(1)}`;
+      }
+      if (prompt && prompt !== _lastPrompt) { pickupPrompt.textContent = prompt; _lastPrompt = prompt; }
+      pickupPrompt.style.display = (prompt && !IS_TOUCH_UI) ? 'block' : 'none';      // 터치 기기에서는 화면 버튼이 대신함
+      hatchInfoEl.style.display = info ? 'block' : 'none'; if (info) hatchInfoEl.textContent = info;
+      dropPrompt.style.display = (carriedEgg && !IS_TOUCH_UI) ? 'block' : 'none';
+      updateEggButton(dt, carriedEgg ? 'drop' : (near && near.kind !== 'info' ? near.kind : null));
+    }
+    restoreGame();
 
     // 칸 울타리 충돌: 문 틈으로 드나들거나, 점프해서 넘어갈 수 있음
     const FENCE_R = CHAR_RADIUS + 0.04, FENCE_CLEAR_Y = 0.28;  // 발이 이 높이(울타리 높이 0.4의 70%)를 넘으면 점프로 넘어가는 중
@@ -5410,9 +5584,9 @@ function createBackground(scene) {
 
 
     // ================= 긴장감: 알을 들고 쫓기는 동안 화면 가장자리가 은은하게 붉어짐 =================
-    // 쫓아오는 동물이 멀면 거의 안 보이고, 40칸 안으로 가까워질수록 조금씩 진해지며 심장 뛰듯 깜빡임(가장 진할 때도 옅게)
+    // 쫓아오는 동물이 멀어도 은은하게 보이고, 40칸 안으로 가까워질수록 진해지며 심장 뛰듯 깜빡임
     const dangerEl = document.getElementById('danger-vignette');
-    const DANGER_BASE = 0.10, DANGER_MAX = 0.35, DANGER_RANGE = 40;
+    const DANGER_BASE = 0.25, DANGER_MAX = 0.65, DANGER_RANGE = 40;
     let dangerLevel = 0, dangerPhase = 0;
     function dangerTarget() {                                  // 지금 쫓기는 중인지 + 얼마나 가까운지(0~1)
       if (!carriedEgg) return { on: false, t: 0 };
@@ -5529,15 +5703,15 @@ function createBackground(scene) {
     let eggHeld = false, eggHold = 0, eggLock = false;
     eggBtn.addEventListener('pointerdown', e => { enableTouchUI(); eggHeld = true; try { eggBtn.setPointerCapture(e.pointerId); } catch (_) {} e.preventDefault(); });
     for (const ev of ['pointerup', 'pointercancel', 'lostpointercapture']) eggBtn.addEventListener(ev, () => { eggHeld = false; });
-    function eggInteract() {                                   // F키와 알 버튼이 같이 쓰는 동작
+    function eggInteract() {                                   // F키와 알 버튼이 같이 쓰는 동작: 들고 있으면 내려놓기 / 알 앞이면 들기 / 내 알이 부화 준비됐으면 부화하기
       if (carriedEgg) dropEgg();
-      else { const target = findNearestEgg(); if (target) pickupEgg(target); }
+      else { const t = findNearestInteractable(); if (t && t.kind === 'pick') pickupEgg(t); else if (t && t.kind === 'hatch') startHatch(t.e); }
     }
-    function updateEggButton(dt, mode) {                       // mode: 'pick' | 'drop' | null
+    function updateEggButton(dt, mode) {                       // mode: 'pick' | 'drop' | 'hatch' | null
       if (!IS_TOUCH_UI) return;
       if (!mode) { eggBtn.style.display = 'none'; eggHold = 0; eggLock = false; return; }
       eggBtn.style.display = 'flex'; eggBtn.dataset.mode = mode;
-      eggBtnLabel.textContent = mode === 'pick' ? '알 들기' : '내려놓기';
+      eggBtnLabel.textContent = mode === 'pick' ? '알 들기' : (mode === 'hatch' ? '부화하기' : '내려놓기');
       eggBtn.classList.toggle('held', eggHeld);
       if (eggHeld && !eggLock) {
         eggHold += dt;
@@ -5712,6 +5886,8 @@ function createBackground(scene) {
 
       updateEggGame(dt);       // 안전선 확인 + 깨어난 동물들 움직임
       updateDanger(dt);        // 쫓기는 동안 화면 가장자리가 은은하게 붉어짐
+      updateHatching(dt);      // 내 칸의 알이 커지고, 부화 준비/부화 진행
+      updatePets(dt); updateFx(dt);   // 부화한 동물 동작 + 알 깨지는 조각
 
       if (character) {
         character.position.set(charPos.x, charPos.y, charPos.z);
@@ -5720,23 +5896,7 @@ function createBackground(scene) {
 
       // 알은 rig.carryMount에 붙어 있어서 캐릭터 애니메이션이 알아서 처리
 
-      // F 프롬프트: 가까운 알이 있을 때만 표시
-      // 가장 가까운 알 찾기 + 하이라이트(흰 테두리) 업데이트
-      const nearTarget = !carriedEgg ? findNearestEgg() : null;
-      const nearEggGroup = nearTarget ? nearTarget.e.group : null;
-      if (nearEggGroup !== _highlightedGroup) {
-        if (_boxHelper) { scene.remove(_boxHelper); _boxHelper = null; }
-        _highlightedGroup = nearEggGroup;
-        if (nearEggGroup) {
-          _boxHelper = new THREE.BoxHelper(nearEggGroup, 0xffffff);
-          _boxHelper.material.linewidth = 2;
-          scene.add(_boxHelper);
-        }
-      }
-      if (_boxHelper) _boxHelper.update();
-      pickupPrompt.style.display = (nearTarget && !IS_TOUCH_UI) ? 'block' : 'none';      // 터치 기기에서는 화면 버튼이 대신함
-      dropPrompt.style.display = (carriedEgg && !IS_TOUCH_UI) ? 'block' : 'none';
-      updateEggButton(dt, carriedEgg ? 'drop' : (nearTarget ? 'pick' : null));
+      updateEggUI(dt);         // 가까운 알 하이라이트 + 안내 문구 + 모바일 알 버튼
 
       // 현재 플레이어가 위치한 생물 바이옴 구역 확인 및 하늘/안개 색상 부드럽게 전환
       const activeZone = BIOME_ZONES.find(z => charPos.z >= z.zMin && charPos.z < z.zMax);
